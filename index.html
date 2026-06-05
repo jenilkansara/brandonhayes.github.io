@@ -72,7 +72,7 @@
       height: clamp(320px, 50vh, 480px); background: #05060a; overflow: hidden;
       border-bottom: 1px solid var(--line); cursor: grab; }
     .banner:active { cursor: grabbing; }
-    .banner canvas { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
+    .banner canvas { position: absolute; inset: 0; width: 100%; height: 100%; display: block; touch-action: none; }
     .banner::after { content: ""; position: absolute; inset: 0; pointer-events: none;
       background: linear-gradient(90deg, rgba(5,6,10,0.78) 0%, rgba(5,6,10,0.35) 42%, rgba(5,6,10,0) 70%),
                   linear-gradient(0deg, rgba(5,6,10,0.55) 0%, rgba(5,6,10,0) 30%); }
@@ -485,7 +485,14 @@
         u32 = new Uint32Array(buf.buffer);
       }
       resize();
-      window.addEventListener("resize", function () { resize(); parts.length = 0; dragIndex = -1; });
+      // Only re-pour on a real width change (e.g. rotation). Mobile browsers fire
+      // resize constantly as the address bar shows/hides — those are height-only and
+      // must NOT reset the simulation.
+      window.addEventListener("resize", function () {
+        var prevW = W;
+        resize();
+        if (Math.abs(W - prevW) > 40) { parts.length = 0; dragIndex = -1; }
+      });
 
       // --- physics params (soft-disk DEM) ---
       var G = 780;        // gravity
@@ -529,7 +536,10 @@
           var p = parts[i], dx = p.x - mouse.x, dy = p.y - mouse.y, d2 = dx * dx + dy * dy;
           if (d2 < p.r * p.r && d2 < bd) { bd = d2; best = i; }
         }
-        if (best >= 0) { dragIndex = best; parts[best].vx = 0; parts[best].vy = 0; try { canvas.setPointerCapture(e.pointerId); } catch (_) {} e.preventDefault(); }
+        if (best >= 0) {
+          dragIndex = best; parts[best].vx = 0; parts[best].vy = 0;
+          try { canvas.setPointerCapture(e.pointerId); } catch (_) {} e.preventDefault();
+        }
       });
       function endDrag(e) { dragIndex = -1; if (e && e.pointerId != null) { try { canvas.releasePointerCapture(e.pointerId); } catch (_) {} } }
       canvas.addEventListener("pointerup", endDrag);
