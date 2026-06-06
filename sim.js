@@ -35,18 +35,22 @@
     if (Math.abs(W - prevW) > 40) { parts.length = 0; dragIndex = -1; }
   });
 
-  // --- physics params (soft-disk DEM) ---
-  var G = 780;        // gravity
-  var K = 1400;       // contact stiffness
-  var DAMP = 0.9;     // contact velocity damping
-  var WALLR = 0.25;   // wall restitution
-  var CAPOV = 8;      // overlap cap for force (stability)
-  var VMAX = 820;     // speed clamp
+  // --- physics params (soft-disk DEM, spring-dashpot contacts) ---
+  var G = 1350;       // gravity magnitude (px/s^2)
+  var KN = 3200;      // contact stiffness (lower = squishier)
+  var CN = 26;        // contact normal damping (controls bounce / restitution)
+  var MU = 0.22;      // Coulomb friction at contacts
+  var AIR = 0.9985;   // very light air drag so motion eventually settles
+  var EWALL = 0.34;   // wall restitution (bounce off the box)
+  var WFRIC = 0.92;   // tangential retention at walls
+  var VMAX = 3200;    // safety speed clamp
+  var VD = 3400;      // drag follow speed
+  var SUB = 5;        // physics substeps per animation frame
   var gx = 0, gy = G; // gravity vector (G down by default; redirected by phone tilt)
   var parts = [];
 
   // --- photoelastic rendering params ---
-  var Fref = 950;     // force normalisation (lower = chains visible at rest)
+  var Fref = 2600;    // force normalisation (lower = chains brighter)
   var FR = 1.5;       // fringe gain (fringe orders per unit stress)
   var rMin = 2.2;     // near-contact stress clamp
 
@@ -58,12 +62,13 @@
 
   function spawn() {
     var r = H * (0.042 + Math.random() * 0.03);
+    var rel = r / (H * 0.057);       // size relative to the average grain
     parts.push({
       x: r + Math.random() * (W - 2 * r),
       y: -r - Math.random() * 160,
       vx: (Math.random() - 0.5) * 30,
       vy: 40 + Math.random() * 60,
-      r: r, f: 0, cts: [], entered: false
+      r: r, m: rel * rel, f: 0, cts: [], entered: false   // mass ~ area
     });
   }
 
@@ -124,55 +129,64 @@
 
     for (i = 0; i < parts.length; i++) { parts[i].f = 0; parts[i].cts.length = 0; }
 
-    // gravity; the dragged grain is driven toward the cursor instead of falling
+    // external acceleration: gravity/tilt for free grains; the dragged grain is
+    // velocity-driven toward the cursor.
     for (i = 0; i < parts.length; i++) {
+      var p = parts[i];
       if (i === dragIndex) {
-        var gp = parts[i];
-        var tvx = (mouse.x - gp.x) / dt, tvy = (mouse.y - gp.y) / dt;
-        var ts = Math.hypot(tvx, tvy), VD = 2400;
+        var tvx = (mouse.x - p.x) / dt, tvy = (mouse.y - p.y) / dt, ts = Math.hypot(tvx, tvy);
         if (ts > VD) { tvx *= VD / ts; tvy *= VD / ts; }
-        gp.vx = tvx; gp.vy = tvy;
+        p.vx = tvx; p.vy = tvy;
       } else {
-        parts[i].vx += gx * dt;
-        parts[i].vy += gy * dt;
+        p.vx = (p.vx + gx * dt) * AIR;
+        p.vy = (p.vy + gy * dt) * AIR;
       }
     }
 
-    // particle-particle contacts (store contact direction + force on each disk)
+    // particle-particle contacts: linear spring-dashpot (normal) + Coulomb friction
+    // (tangential). Forces divide by mass so larger grains push smaller ones.
     for (i = 0; i < parts.length; i++) {
       var a = parts[i];
       for (j = i + 1; j < parts.length; j++) {
         var b = parts[j];
-        var dx = b.x - a.x, dy = b.y - a.y, d = Math.hypot(dx, dy), rr = a.r + b.r;
-        if (d < rr && d > 0.0001) {
-          var ov = rr - d, nx = dx / d, ny = dy / d;
-          var f = K * Math.min(ov, CAPOV);
-          a.vx -= nx * f * dt; a.vy -= ny * f * dt;
-          b.vx += nx * f * dt; b.vy += ny * f * dt;
-          a.f += f; b.f += f;
-          a.cts.push({ ux: nx, uy: ny, f: f });    // outward dir from a toward b
-          b.cts.push({ ux: -nx, uy: -ny, f: f });  // outward dir from b toward a
-          a.x -= nx * ov * 0.5; a.y -= ny * ov * 0.5;
-          b.x += nx * ov * 0.5; b.y += ny * ov * 0.5;
-          a.vx *= DAMP; a.vy *= DAMP; b.vx *= DAMP; b.vy *= DAMP;
-        }
+        var dx = b.x - a.x, dy = b.y - a.y, rr = a.r + b.r;
+        if (dx > rr || dx < -rr || dy > rr || dy < -rr) continue;
+        var d2 = dx * dx + dy * dy;
+        if (d2 >= rr * rr || d2 < 1e-6) continue;
+        var d = Math.sqrt(d2), nx = dx / d, ny = dy / d, ov = rr - d;
+        var rvx = b.vx - a.vx, rvy = b.vy - a.vy;
+        var vn = rvx * nx + rvy * ny;            // relative normal velocity (+ = separating)
+        var Fn = KN * ov - CN * vn;              // spring + dashpot
+        if (Fn < 0) Fn = 0;                       // contacts push only, never stick
+        var vtx = rvx - vn * nx, vty = rvy - vn * ny, vtm = Math.hypot(vtx, vty);
+        var ftx = 0, fty = 0;
+        if (vtm > 1e-4) { var Ft = MU * Fn; ftx = -Ft * vtx / vtm; fty = -Ft * vty / vtm; }
+        var Fx = nx * Fn + ftx, Fy = ny * Fn + fty;
+        a.vx -= Fx * dt / a.m; a.vy -= Fy * dt / a.m;
+        b.vx += Fx * dt / b.m; b.vy += Fy * dt / b.m;
+        var fc = KN * ov;                         // elastic compression for the fringes
+        a.f += fc; b.f += fc;
+        a.cts.push({ ux: nx, uy: ny, f: fc });
+        b.cts.push({ ux: -nx, uy: -ny, f: fc });
       }
     }
 
-    // integrate + rectangular walls (left / right / floor) with contact registration
+    // integrate + box walls (left / right / floor / closed top)
     for (i = 0; i < parts.length; i++) {
       var q = parts[i];
-      var sp = Math.hypot(q.vx, q.vy);
-      if (i !== dragIndex && sp > VMAX) { q.vx *= VMAX / sp; q.vy *= VMAX / sp; }
+      if (i !== dragIndex) {
+        var sp = Math.hypot(q.vx, q.vy);
+        if (sp > VMAX) { q.vx *= VMAX / sp; q.vy *= VMAX / sp; }
+      }
       q.x += q.vx * dt; q.y += q.vy * dt;
       var pen, fw;
-      if (q.x < q.r) { pen = q.r - q.x; fw = K * Math.min(pen, CAPOV); q.x = q.r; q.vx = -q.vx * WALLR; q.f += fw; q.cts.push({ ux: -1, uy: 0, f: fw }); }
-      if (q.x > W - q.r) { pen = q.x - (W - q.r); fw = K * Math.min(pen, CAPOV); q.x = W - q.r; q.vx = -q.vx * WALLR; q.f += fw; q.cts.push({ ux: 1, uy: 0, f: fw }); }
-      if (q.y > H - q.r) { pen = q.y - (H - q.r); fw = K * Math.min(pen, CAPOV); if (fw < 300) fw = 300; q.y = H - q.r; q.vy = -q.vy * WALLR; q.vx *= 0.94; q.f += fw; q.cts.push({ ux: 0, uy: 1, f: fw }); }
+      if (q.x < q.r) { pen = q.r - q.x; q.x = q.r; if (q.vx < 0) q.vx = -q.vx * EWALL; q.vy *= WFRIC; fw = KN * pen; if (fw < 240) fw = 240; q.f += fw; q.cts.push({ ux: -1, uy: 0, f: fw }); }
+      else if (q.x > W - q.r) { pen = q.x - (W - q.r); q.x = W - q.r; if (q.vx > 0) q.vx = -q.vx * EWALL; q.vy *= WFRIC; fw = KN * pen; if (fw < 240) fw = 240; q.f += fw; q.cts.push({ ux: 1, uy: 0, f: fw }); }
+      if (q.y > H - q.r) { pen = q.y - (H - q.r); q.y = H - q.r; if (q.vy > 0) q.vy = -q.vy * EWALL; q.vx *= WFRIC; fw = KN * pen; if (fw < 300) fw = 300; q.f += fw; q.cts.push({ ux: 0, uy: 1, f: fw }); }
       // Closed top: a grain pours in from above, then once fully inside the box the
       // ceiling holds it in (so tilting/dragging can't throw grains out the top).
       if (!q.entered && q.y >= q.r) q.entered = true;
-      if (q.entered && q.y < q.r) { pen = q.r - q.y; fw = K * Math.min(pen, CAPOV); q.y = q.r; q.vy = -q.vy * WALLR; q.f += fw; q.cts.push({ ux: 0, uy: -1, f: fw }); }
+      if (q.entered && q.y < q.r) { pen = q.r - q.y; q.y = q.r; if (q.vy < 0) q.vy = -q.vy * EWALL; q.vx *= WFRIC; fw = KN * pen; if (fw < 240) fw = 240; q.f += fw; q.cts.push({ ux: 0, uy: -1, f: fw }); }
     }
 
     // Cap only EXCESSIVE penetration of the dragged grain. Grains may still touch
@@ -257,14 +271,14 @@
   var reduce = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
 
   function frame(now) {
-    var dt = (now - last) / 1000; last = now; if (dt > 0.05) dt = 0.05;
-    for (var k = 0; k < 2; k++) step(dt / 2);
+    var dt = (now - last) / 1000; last = now; if (dt > 0.045) dt = 0.045;
+    for (var k = 0; k < SUB; k++) step(dt / SUB);
     draw();
     requestAnimationFrame(frame);
   }
 
   if (reduce) {
-    for (var w = 0; w < 1100; w++) step(0.016);
+    for (var w = 0; w < 2600; w++) step(0.004);
     draw();
   } else {
     requestAnimationFrame(frame);
