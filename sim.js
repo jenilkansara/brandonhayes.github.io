@@ -42,6 +42,7 @@
   var WALLR = 0.25;   // wall restitution
   var CAPOV = 8;      // overlap cap for force (stability)
   var VMAX = 820;     // speed clamp
+  var gx = 0, gy = G; // gravity vector (G down by default; redirected by phone tilt)
   var parts = [];
 
   // --- photoelastic rendering params ---
@@ -62,7 +63,7 @@
       y: -r - Math.random() * 160,
       vx: (Math.random() - 0.5) * 30,
       vy: 40 + Math.random() * 60,
-      r: r, f: 0, cts: []
+      r: r, f: 0, cts: [], entered: false
     });
   }
 
@@ -71,6 +72,7 @@
   function ptr(e) { var rct = canvas.getBoundingClientRect(); mouse.x = e.clientX - rct.left; mouse.y = e.clientY - rct.top; mouse.active = true; }
   canvas.addEventListener("pointermove", ptr);
   canvas.addEventListener("pointerdown", function (e) {
+    enableTilt();
     ptr(e);
     var best = -1, bd = 1e18;
     for (var i = 0; i < parts.length; i++) {
@@ -86,6 +88,30 @@
   canvas.addEventListener("pointerup", endDrag);
   canvas.addEventListener("pointercancel", endDrag);
   canvas.addEventListener("pointerleave", function () { if (dragIndex < 0) { mouse.active = false; mouse.x = -1e4; mouse.y = -1e4; } });
+
+  // --- Gyroscope: tilt the phone to set the gravity direction ---
+  // beta = front/back tilt, gamma = left/right tilt. Holding the phone upright
+  // (beta ~ 90) gives normal downward gravity; tilting left/right slides grains.
+  function onOrient(e) {
+    if (e.gamma == null || e.beta == null) return;
+    var gr = e.gamma * Math.PI / 180, br = e.beta * Math.PI / 180;
+    gx = G * Math.sin(gr);
+    gy = G * Math.sin(br);
+  }
+  var tiltEnabled = false;
+  function enableTilt() {
+    if (tiltEnabled) return;
+    tiltEnabled = true;
+    if (typeof DeviceOrientationEvent !== "undefined" &&
+        typeof DeviceOrientationEvent.requestPermission === "function") {
+      // iOS 13+ requires an explicit permission prompt from a user gesture.
+      DeviceOrientationEvent.requestPermission().then(function (state) {
+        if (state === "granted") window.addEventListener("deviceorientation", onOrient);
+      }).catch(function () {});
+    } else if (window.DeviceOrientationEvent) {
+      window.addEventListener("deviceorientation", onOrient);
+    }
+  }
 
   function step(dt) {
     var N = targetN(), i, j;
@@ -103,7 +129,8 @@
         if (ts > VD) { tvx *= VD / ts; tvy *= VD / ts; }
         gp.vx = tvx; gp.vy = tvy;
       } else {
-        parts[i].vy += G * dt;
+        parts[i].vx += gx * dt;
+        parts[i].vy += gy * dt;
       }
     }
 
@@ -138,6 +165,10 @@
       if (q.x < q.r) { pen = q.r - q.x; fw = K * Math.min(pen, CAPOV); q.x = q.r; q.vx = -q.vx * WALLR; q.f += fw; q.cts.push({ ux: -1, uy: 0, f: fw }); }
       if (q.x > W - q.r) { pen = q.x - (W - q.r); fw = K * Math.min(pen, CAPOV); q.x = W - q.r; q.vx = -q.vx * WALLR; q.f += fw; q.cts.push({ ux: 1, uy: 0, f: fw }); }
       if (q.y > H - q.r) { pen = q.y - (H - q.r); fw = K * Math.min(pen, CAPOV); if (fw < 300) fw = 300; q.y = H - q.r; q.vy = -q.vy * WALLR; q.vx *= 0.94; q.f += fw; q.cts.push({ ux: 0, uy: 1, f: fw }); }
+      // Closed top: a grain pours in from above, then once fully inside the box the
+      // ceiling holds it in (so tilting/dragging can't throw grains out the top).
+      if (!q.entered && q.y >= q.r) q.entered = true;
+      if (q.entered && q.y < q.r) { pen = q.r - q.y; fw = K * Math.min(pen, CAPOV); q.y = q.r; q.vy = -q.vy * WALLR; q.f += fw; q.cts.push({ ux: 0, uy: -1, f: fw }); }
     }
 
     // Cap only EXCESSIVE penetration of the dragged grain. Grains may still touch
