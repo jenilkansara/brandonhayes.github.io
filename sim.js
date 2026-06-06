@@ -112,6 +112,10 @@
       window.addEventListener("deviceorientation", onOrient);
     }
   }
+  // iOS is picky about which gesture triggers the permission prompt, so request it
+  // from touchend/click as well as pointerdown.
+  canvas.addEventListener("click", enableTilt);
+  window.addEventListener("touchend", enableTilt);
 
   function step(dt) {
     var N = targetN(), i, j;
