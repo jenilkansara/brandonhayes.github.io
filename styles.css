@@ -68,6 +68,11 @@ nav { position: sticky; top: 0; z-index: 20;
 .banner-caption { position: absolute; z-index: 2; bottom: 12px; right: 18px;
   font-size: 11px; letter-spacing: 0.12em; text-transform: uppercase;
   color: rgba(255,255,255,0.5); pointer-events: none; }
+.tilt-btn { position: absolute; z-index: 3; left: 16px; bottom: 12px;
+  background: rgba(255,255,255,0.12); color: #fff; border: 1px solid rgba(255,255,255,0.35);
+  padding: 7px 13px; border-radius: 999px; font-family: var(--sans); font-size: 12px;
+  letter-spacing: 0.04em; cursor: pointer; -webkit-backdrop-filter: blur(4px); backdrop-filter: blur(4px); }
+.tilt-btn:hover { background: rgba(255,255,255,0.2); }
 
 /* Hero / intro */
 .about { padding: 48px 0 38px; border-top: none; }

@@ -72,7 +72,6 @@
   function ptr(e) { var rct = canvas.getBoundingClientRect(); mouse.x = e.clientX - rct.left; mouse.y = e.clientY - rct.top; mouse.active = true; }
   canvas.addEventListener("pointermove", ptr);
   canvas.addEventListener("pointerdown", function (e) {
-    enableTilt();
     ptr(e);
     var best = -1, bd = 1e18;
     for (var i = 0; i < parts.length; i++) {
@@ -94,28 +93,29 @@
   // (beta ~ 90) gives normal downward gravity; tilting left/right slides grains.
   function onOrient(e) {
     if (e.gamma == null || e.beta == null) return;
-    var gr = e.gamma * Math.PI / 180, br = e.beta * Math.PI / 180;
-    gx = G * Math.sin(gr);
-    gy = G * Math.sin(br);
+    gx = G * Math.sin(e.gamma * Math.PI / 180);
+    gy = G * Math.sin(e.beta * Math.PI / 180);
   }
-  var tiltEnabled = false;
-  function enableTilt() {
-    if (tiltEnabled) return;
-    tiltEnabled = true;
-    if (typeof DeviceOrientationEvent !== "undefined" &&
-        typeof DeviceOrientationEvent.requestPermission === "function") {
-      // iOS 13+ requires an explicit permission prompt from a user gesture.
+  if (typeof DeviceOrientationEvent !== "undefined" &&
+      typeof DeviceOrientationEvent.requestPermission === "function") {
+    // iOS: the permission prompt only appears from a click on a real button.
+    var banner = document.getElementById("banner");
+    var tb = document.createElement("button");
+    tb.className = "tilt-btn";
+    tb.type = "button";
+    tb.textContent = "Enable tilt";
+    if (banner) banner.appendChild(tb);
+    tb.addEventListener("click", function (ev) {
+      ev.stopPropagation();
       DeviceOrientationEvent.requestPermission().then(function (state) {
         if (state === "granted") window.addEventListener("deviceorientation", onOrient);
-      }).catch(function () {});
-    } else if (window.DeviceOrientationEvent) {
-      window.addEventListener("deviceorientation", onOrient);
-    }
+        tb.remove();
+      }).catch(function () { tb.remove(); });
+    });
+  } else if (window.DeviceOrientationEvent) {
+    // Android and others: no prompt required.
+    window.addEventListener("deviceorientation", onOrient);
   }
-  // iOS is picky about which gesture triggers the permission prompt, so request it
-  // from touchend/click as well as pointerdown.
-  canvas.addEventListener("click", enableTilt);
-  window.addEventListener("touchend", enableTilt);
 
   function step(dt) {
     var N = targetN(), i, j;
